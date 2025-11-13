@@ -1,0 +1,142 @@
+
+// bash最新バージョン（v5.3）に合わせる
+
+/*
+token_lstにトークナイズ後の情報格納
+→シングルクオートで囲まれたもの以外は環境変数の展開
+→joint_nextのノードの連結
+→t_cmd型のcmd_lstへのコマンド及び引数および変数代入及びinfile,outfileの情報格納（token_lstはfreeする）
+→子プロセスを作成、コマンドの実行
+*/
+
+/*クオート処理について
+・一時的な変数代入（TEST=/test/path）の
+TEST=部分はクオーとなし（あれば変数代入と認識しない）
+→exportを用いる場合はクオートどこでもOK
+・TEST=test=testも有効（test=testがvalueとなる）
+・変数使用時は＄TEST全体を一つのクオーとで囲む
+ファイル名はコマンドや引数と同様のクオート処理
+*/
+
+/*変数代入の構文チェックのタイミング
+・コマンド前に一時的に設定される変数代入に関してはトークナイザーの段階で構文チェック（有効な構文でない場合はそのトークンはコマンド名として扱われるのでsyntax errorにはならない）
+・exportされる変数代入に関してはexport関数内で構文チェック
+*/
+
+/*ローカル変数設定か一時的な変数設定かの区別
+t_cmdリンクリストの初めのノードがargv=NULLの時に、lst->next == NULLならそのenv_varはローカル変数
+ローカル変数の例↓
+TEST=test
+TEST=TEST > outfile.txt
+一時的は変数の例↓
+TEST=test env | grep TEST
+echo Hello World | TEST=test | wc -l (この時の出力は0)
+*/
+
+/*t_cmdについて
+・一時的な環境変数の代入は必ずコマンドやリダイレクトの前
+・token_lstの1つ目やpipe(|)の直後にpipeが来るとsyntax error
+・デリミタがくれば次のトークンをファイル名とする（コマンドや引数の間でも）
+例えば ”echo > outfile.txt hello world”や"echo hello  > outfile.txt world"も有効
+*/
+
+/*変数代入の影響範囲(ft_peraer.c)
+・変数代入の情報はt_cmd->tmp_envに格納するが、token_lst->strの文字列における変数展開では元のenv_lstが参照されるのでtmp_envは影響しない。
+子プログラムには引き継がれるので、commandを実行する子プロセス内のenvやexport関数の出力には反映される
+*/
+
+/*
+・コマンド名なども変数に置き換え可能
+->変数展開してからパース処理
+*/
+
+/*終了コード
+正常：０
+syntax errpr : 2 (bash-v3.2だと258だった)
+
+*/
+
+
+/*リダイレクトはパイプよりも優先順位高い！！
+ex) ls -l | wc -l > outfile1.txt | cat > outfile2.txtのとき
+	・outfile2.txtには何も出力されない
+	・ただし、コマンドの実行はされるのでファイルの生成やリセットはされる
+	 以下のケースですべて生成されsleep 2も実行されることがわかる
+ 	ls -l | wc -l > outfile1.txt | sleep 2 > outfile2.txt | cat > outfile3.txt
+
+*/
+
+/*同じリダイレクトがいくつもある場合、後ろの記述が優先される
+ex)  < main.c cat < infile.txt < main.c | wc -l > outfile.txt > test.txt
+ 上記の場合、"< main.c"と"> test.txt"が有効
+
+*/
+
+/*コマンドがなくてもリダイレクトは行われる
+ex) > outfile.txt
+(リダイレクトはシェルの機能なので優先順位が高い)
+すなわち、コマンドラインのどの位置に置かれてもリダイレクトはコマンドの実行前に処理
+よって、> outfile.txt cat < infile.txtも有効
+*/ 
+
+/*bashは直前のcmd_argsの最後の値を環境変数'_'に自動で格納する
+
+bash-5.3$ echo hello world
+hello world
+bash-5.3$ echo $_
+world
+bash-5.3$ TEST=test
+bash-5.3$ echo $_
+
+bash-5.3$ TEST=test > outfile.txt
+bash-5.3$ echo $_
+
+bash-5.3$ cd
+bash-5.3$ echo $_
+cd
+bash-5.3$
+
+*/
+
+/*ambiguous redirectエラーのタイミング
+以下より、おそらくt_cmdリンクリストが完成した後にエラーチェック
+↓
+(base) MacBookAir-Rinka:git-minishell rinka$ echo hello | < $NON
+bash: $NON: ambiguous redirect
+(base) MacBookAir-Rinka:git-minishell rinka$ echo hello | < $NON | |
+bash: 予期しないトークン `|' 周辺に構文エラーがあります
+(base) MacBookAir-Rinka:git-minishell rinka$
+
+(補足)
+以下より、ambiguous redirectと No such file or directoryは同じタイミングでエラー検出しているっぽい
+bash-5.3$ TEST=main.c
+bash-5.3$ < $TEST < $TSET2 < main.c wc -l
+bash: $TSET2: ambiguous redirect
+bash-5.3$ < nonexist < $TEST < $TSET2 < main.c wc -l
+bash: nonexist: No such file or directory
+bash-5.3$ < main.c < $TEST < $TSET2 < main.c wc -l
+bash: $TSET2: ambiguous redirect
+
+（補足２）
+bash-5.3$ < * < Makefile cat | echo hello
+hello
+bash: *: ambiguous redirect
+↑ファイル名に関してはt_cmd作成後、ececuve実行直前にワールドカードの展開をpした方が良さそう
+
+（補足３）
+bash-5.3$ < $NON < non  sleep 2 | echo hello
+bash: $NON: ambiguous redirect
+hello
+bash-5.3$ < non < $NON  sleep 2 | echo hello
+bash: non: No such file or directory
+hello
+↑この時両方sleepは実行されないため、子プロセス内ではファイル名チェックが優先
+
+
+*/
+
+↓先に環境変数の展開をする
+bash-5.3$ env | grep TEST
+TEST=*
+bash-5.3$ ls *
+test    test2

@@ -1,0 +1,46 @@
+＜実装済み＞
+◇ビルドインコマンド
+・env
+・export(引数（変数代入）ありなし両方)
+・unset
+◇トークナイズ
+・トークンごとにt_tokenノードに情報格納
+・空文字も一つのトークンとする
+◇パーサ
+・環境変数$展開
+(エラー処理用に展開前の文字列も保持するように実装)
+・必要に応じたトークン連結
+（例: "he"lloをheとlloに分けていたがここで連結）
+・t_tokenをt_cmdにコマンドごとに格納
+		t_token ⇨ [<] [infile.txt] [cat] [|] [wc] [-l] [>] [outfile.txt]
+		↓
+		t_cmd ⇨ [< infile.txt cat] | [wc -l > outfile.txt]
+	・ワイルドカードの展開("echo *.c"など)
+◇エラー処理
+・malloc
+その場でメモリ解放してexit()
+・その他エラー
+env_lstを残してmainに戻る
+◇ヒアドキュメント（ft_heredoc.c）
+・create_heredoc_filename()で固有の隠しファイル名を作成（ファイル名は/tmp/hd_XX_XXの形式にしてる）
+↓
+・access()で既に存在するファイルでないことを確認
+↓
+・作成したファイルをopen()
+↓
+・readline()で標準入力から書き込み
+↓
+・いったんclose()
+↓
+・他ファイルと同じようにコマンドの実行やpipe()に使用
+↓
+・t_cmd*などと同じタイミングでunlink()
+※open()した全てのfdを閉じ、unlink()するとそのファイルは自動で削除される
+※課題要件より、heredocの入力内容がrlのhistoryに残るようにはしなくていい (なるほど~！)
+
+＜これから実装＞
+・ambiguous redirect(展開結果が複数値)とNo such file or directoryをチェックしながらファイルopenし、パイプに繋がないファイルも含めてintの配列にfdを格納（execve()実行前にまとめてclose）
+↑ft_redirectにint *fdsを作る？ -> 一括で閉じられるから？
+・ファイル名はt_cmd作成後、ececuve実行直前にワールドカードの展開
+・norminette対応
+
